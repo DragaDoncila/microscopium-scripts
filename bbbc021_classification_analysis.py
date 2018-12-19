@@ -14,12 +14,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 PATH = "/home/draga/FIT2082/Data_CSVs/"
-OUT_PATH = "/home/draga/FIT2082/Data_Scatters/"
-pd.set_option('display.max_columns', None)
+OUT_PATH = "/home/draga/FIT2082/test/"
+
 
 def main():
-    h = 0.05  # step size in the mesh (.02 initially caused memory error)
-
     all_accuracies = []
     all_labels = []
 
@@ -29,6 +27,7 @@ def main():
 
         match = re.search(pattern, filename)
         if match:
+            print(match.groups())
             # load all data points from CSV
             point_data_full = pd.read_csv(PATH + filename)
 
@@ -50,91 +49,28 @@ def main():
             X = np.stack((x_points, y_points), axis=1)
             y = no_nones['group.dummy'].values
 
-
-            cmap_light = ListedColormap(sns.color_palette('pastel', 13))
-
-            colours_bold = list(sns.color_palette('bright', 13))
-
-            # cross reference colour to group for plotting
-            cats = np.unique(no_nones['group'])
-            color_dict = dict(zip(cats, colours_bold))
-            colour_col = no_nones['group'].apply(lambda x: color_dict[x])
-
             # find best model for this data
             k, accuracies = get_best_k(X, y)
 
-            # track accuracies and labels for all k values
+            # track accuracies and labels for all datasets
             label = (match.group(2) if len(match.group(2)) != 0 else "PCA") + (
-            "_all_objects" if len(match.group(1)) != 5 else "_sampled")
+                "_all_objects" if len(match.group(1)) != 5 else "_sampled")
             all_labels.extend([label for _ in range(len(accuracies))])
             all_accuracies.extend(accuracies)
 
-            # fit data
+            # fit classifier to data with value of k from CV
             clf = neighbors.KNeighborsClassifier(k, weights='distance')
             clf.fit(X, y)
-
-            # # plot confusion matrix
             y_pred = cross_val_predict(clf, X, y, cv=5)
             scores = cross_val_score(clf, X, y, cv=5)
 
-            cnf_matrix = confusion_matrix(y, y_pred)
-            np.set_printoptions(precision=2)
+            # plot confusion matrix
+            plot_matrix(y, y_pred, scores, k, match)
 
-            # Plot confusion matrix
-            # plt.figure()
-            # plot_confusion_matrix(cnf_matrix, classes=["Actin distruptors", "Aurora kinase inhibitors", "Cholesterol-lowering", "DMSO",
-            #                                            "DNA damage", "DNA replication", "Eg5 inhibitors", "Epithelial", "Kinase inhibitors",
-            #                                            "Microtubule destabilizers", "Microtubule stabilizers", "Protein degradation", "Protein synthesis"],
-            #                       title='Mean Prediction of Treatment Mode of Action in 5-fold CV on KNN Classifier\n tSNE All Object Embedding' )
-            # plt.xticks(rotation=82)
-            # plt.xlabel('Predicted label\naccuracy={:0.4f}; misclass={:0.4f}\n k={}'.format(np.mean(scores), 1 - np.mean(scores), k))
-            # plt.show()
-
-
-            # Plot the decision boundary
-            # x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
-            # y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
-            #
-            # xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
-            #                      np.arange(y_min, y_max, h))
-            #
-            # Z = clf.predict(np.c_[xx.ravel(), yy.ravel()])
-            #
-            # plot_decision_boundaries(Z, xx, yy, no_nones, nones, cats, cmap_light, colours_bold, match, k, np.mean(scores))
-
-
+            plot_decision_boundaries(clf, X, no_nones, nones, match, k, np.mean(scores))
 
     # plot accuracies from k-nearest neighbours cross-validation
-    # k_list = []
-    # for i in range(6):
-    #     for j in range(3, 21):
-    #         for k in range(5):
-    #             k_list.append(j)
-    # k_list.extend(list(range(3, 21)))
-    # all_accuracies.extend([1/13 for _ in range(3, 21)])
-    # all_labels.extend(['Baseline' for _ in range(3, 21)])
-    # # print(k_list)
-    # accuracy_df = pd.DataFrame(k_list)
-    # accuracy_df.columns = ["k"]
-    # accuracy_df['Accuracy'] = all_accuracies
-    # accuracy_df['Method'] = all_labels
-    # # plt.figure(figsize=(15,6))
-    # fig, ax = plt.subplots(figsize=(20, 10))
-    # sns.lineplot(x="k", y="Accuracy",
-    #              hue="Method",
-    #              data=accuracy_df, ci=95)
-    # ax.lines[6].set_linestyle("--")
-    # # plt.legend(loc='upper left', ncol=1, bbox_to_anchor=(0.78, 0.72),
-    # #         borderaxespad=0, frameon=False)
-    # box = ax.get_position()
-    # ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-    # handles, labels = plt.gca().get_legend_handles_labels()
-    # handles[-1].set_linestyle('dashed')
-    # labels = [labels[0], labels[1], labels[6], labels[4], labels[3], labels[5], labels[2], labels[7]]
-    # handles = [handles[0], handles[1], handles[6], handles[4], handles[3], handles[5], handles[2], handles[7]]
-    # plt.legend(handles, labels, loc='center left', bbox_to_anchor=(1.02, 0.5))
-    # plt.title("Distribution of Prediction Accuracy vs. Value of K\nin KNN Classification of Different Embedding Methods")
-    # plt.show()
+    plot_knearest_cv_results(all_accuracies, all_labels)
 
 
 def get_counts(full_data):
@@ -264,61 +200,206 @@ def get_best_k(X, y):
     return (best_k, all_accuracies)
 
 
-def plot_decision_boundaries(Z, xx, yy, no_nones, nones, cats, cmap_light, colour_col, match, k, accuracy):
-    # Put the result into a color plot
+def plot_decision_boundaries(classifier, X, no_nones, nones, match, k, accuracy):
+    """
+    Plot classified training points against decision map of K nearest neighbours classification and unknown MOA points
+
+    Parameters
+    ----------
+    classifier: K-nearest model
+        Classifier set up with best value of K from cross-validation
+    X: 2D np-array
+        Training data for classifier as (x,y) coordinates
+    no_nones: pd dataframe
+        Information about sampled training points
+    nones: pd dataframe
+        Information about unknown MOA points
+    match: re match objects
+        Match object containing filename of data
+    k: integer
+        Value of K used in classifier
+    accuracy: float
+        Average accuracy of classifier in cross-validation
+
+    Returns
+    -------
+    None
+
+    """
+    # Define colour maps for mesh and scatter
+    cmap_light = ListedColormap(sns.color_palette('pastel', 13))
+    colours_bold = list(sns.color_palette('bright', 13))
+    cats = np.unique(no_nones['group'])
+    color_dict = dict(zip(cats, colours_bold))
+
+    # Plot decision boundaries as a mesh
+    h = 0.05  # step size in the mesh (.02 initially caused memory error)
+
+    x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
+    y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
+
+    xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
+                         np.arange(y_min, y_max, h))
+
+    Z = classifier.predict(np.c_[xx.ravel(), yy.ravel()])
     Z = Z.reshape(xx.shape)
     fig, ax = plt.subplots()
     box = ax.get_position()
     ax.set_position([box.x0, box.y0, box.width * 0.78, box.height])
-
     plt.pcolormesh(xx, yy, Z, cmap=cmap_light, zorder=1)
-    # Plot the training points
-    # ax.scatter(x_points, y_points, c=colour_col.values,
-    #             edgecolor='k', s=20, zorder=3, label=list(cats))
+
+    # Plot the unknown MOA with transparency
+    ax.scatter(nones['x'].values, nones['y'].values, c=(135 / 255, 135 / 255, 135 / 255, 0.15), s=15, zorder=2,
+               label="UNKNOWN")
+
+    # Plot the classifier training set
     j = 0
     for i, dff in no_nones.groupby("group"):
-        print(dff.head())
-        ax.scatter(dff['x'], dff['y'], s=20, c=colour_col[j],
-                   edgecolors='k', label=dff.iloc[0][4])
+        ax.scatter(dff['x'], dff['y'], s=20, c=color_dict[i],
+                   edgecolors='k', label=i, zorder=3)
         j += 1
 
-
-    ax.scatter(nones['x'].values, nones['y'].values, c=(135 / 255, 135 / 255, 135 / 255, 0.15), s=15, zorder=2,
-                label="UNKNOWN")
+    # Ensure axis limits don't stretch beyond colour mesh
     ax.set_xlim(xx.min(), xx.max())
     ax.set_ylim(yy.min(), yy.max())
-    ax.set_xlabel("tSNE Component 1\nk={} ;accuracy={:.4f} ".format(k, accuracy))
-    ax.set_ylabel("tSNE Component 2")
 
-    # title = ("PCA" if len(match.group(2)) == 0 else match.group(2)) + \
-    #         (" Single Object Sample" if len(match.group(1)) != 5 else " Multi Object Sample")
-    #
-    # plt.title(title + \
-    #         " , k={} accuracy={:.2f}".format(k, accuracy))
-    # plt.savefig(OUT_PATH + title)
+    # Get name of algorithm being used for current dataset
+    algorithm_name = "PCA" if len(match.group(2)) == 0 else match.group(2)
+    sampling_status = "All Objects" if len(match.group(1)) == 4 else "Sampled Objects"
 
-    title = ("tSNE Embedding of BBBC021 Images \nwith KNN Classifier Decision Boundary")
+    # Set axis labels, title and legend
+    ax.set_xlabel("{} Component 1\nk={} ;accuracy={:.4f} ".format(algorithm_name, k, accuracy))
+    ax.set_ylabel("{} Component 2".format(algorithm_name))
+
+    title = ("{} Embedding of BBBC021 Images \nwith KNN Classifier Decision Boundary, {}".format(algorithm_name,
+                                                                                                 sampling_status))
     ax.set_title(title)
     ax.legend(loc='center left', bbox_to_anchor=(1.00, 0.4))
-    # plt.savefig(OUT_PATH + "tSNE_final.png")
+
+    # plt.savefig(OUT_PATH + "{}_final.png".format(algorithm_name))
+    plt.show()
+
+
+def plot_knearest_cv_results(all_accuracies, all_labels):
+    """
+    Plot distribution of accuracy of different values of K in cross validation, with 95% CI error bars,
+    for different embedding algorithms
+
+    Parameters
+    ----------
+    all_accuracies: python list of floats
+        accuracies of each value of k tried during cross validation across different embedding algorithms
+    all_labels: python list of strings
+        embedding algorithm and sampling method belonging to each accuracy
+
+    Returns
+    -------
+    None
+    """
+
+    # Create list to assign value of k to each plot point
+    k_list = []
+    for i in range(6):
+        for j in range(3, 21):
+            for k in range(5):
+                k_list.append(j)
+    k_list.extend(list(range(3, 21)))
+
+    # Add baseline accuracy points
+    all_accuracies.extend([1 / 13 for _ in range(3, 21)])
+    all_labels.extend(['Baseline' for _ in range(3, 21)])
+
+    # Create dataframe from k values, their accuracy, and the embedding method used
+    accuracy_df = pd.DataFrame(k_list)
+    accuracy_df.columns = ["k"]
+    accuracy_df['Accuracy'] = all_accuracies
+    accuracy_df['Method'] = all_labels
+
+    # Plot the lines, with 95% confidence interval
+    fig, ax = plt.subplots(figsize=(20, 10))
+    sns.lineplot(x="k", y="Accuracy",
+                 hue="Method",
+                 data=accuracy_df, ci=95)
+
+    # Make baseline accuracy dashed
+    ax.lines[6].set_linestyle("--")
+
+    # Move axis to make room for legend
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+    # Define labels and symbols to appear in legend
+    handles, labels = plt.gca().get_legend_handles_labels()
+    handles[-1].set_linestyle('dashed')
+    labels = [labels[0], labels[1], labels[6], labels[4], labels[3], labels[5], labels[2], labels[7]]
+    handles = [handles[0], handles[1], handles[6], handles[4], handles[3], handles[5], handles[2], handles[7]]
+
+    plt.legend(handles, labels, loc='center left', bbox_to_anchor=(1.02, 0.5))
+    plt.title(
+        "Distribution of Prediction Accuracy vs. Value of K\nin KNN Classification of Different Embedding Methods")
+    plt.show()
+
+
+def plot_matrix(y, y_pred, scores, k, match):
+    """
+    Calculate and plot confusion matrix for the given value of k using the actual and predicted y values.
+
+    Parameters
+    ----------
+    y: ndarray
+        Actual y values used in classifier
+    y_pred: ndarray
+        Predicted y values from classifier
+    scores: ndarray
+        Accuracy scores of given value of k
+    k: integer
+        Value of k used for this data
+    match: re match objects
+        Match corresponding to file name of data
+
+    Returns
+    -------
+    None
+    """
+    cnf_matrix = confusion_matrix(y, y_pred)
+    np.set_printoptions(precision=2)
+
+    plt.figure()
+    plot_confusion_matrix(cnf_matrix,
+                          classes=["Actin distruptors", "Aurora kinase inhibitors", "Cholesterol-lowering", "DMSO",
+                                   "DNA damage", "DNA replication", "Eg5 inhibitors", "Epithelial", "Kinase inhibitors",
+                                   "Microtubule destabilizers", "Microtubule stabilizers", "Protein degradation",
+                                   "Protein synthesis"],
+                          title='Mean Prediction of Treatment Mode of Action in 5-fold CV on KNN Classifier\n {} Embedding, {}'.format(
+                              "PCA" if len(match.group(2)) == 0 else match.group(2),
+                              "All Objects" if len(match.group(1)) == 4 else "Sampled Objects"))
+    plt.xticks(rotation=82)
+    plt.xlabel(
+        'Predicted label\naccuracy={:0.4f}; misclass={:0.4f}\n k={}'.format(np.mean(scores), 1 - np.mean(scores), k))
     plt.show()
 
 
 def plot_confusion_matrix(cm, classes,
-                          normalize=False,
                           title='Confusion matrix',
                           cmap=plt.cm.Blues):
     """
-    This function prints and plots the confusion matrix.
-    Normalization can be applied by setting `normalize=True`.
-    """
-    if normalize:
-        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-        print("Normalized confusion matrix")
-    else:
-        print('Confusion matrix, without normalization')
+    This function plots the confusion matrix.
 
-    print(cm)
+    Parameters
+    ----------
+    cm: ndarray
+        Array of counts classified in each predicted vs. actual class
+    classes: python list of strings
+        Labels of each class
+    title: string
+        Desired title of plot. Default is 'Confusion Matrix'
+    cmap: LinearSegmentedColormap
+        Colour map to use for confusion matrix. Default is Blues.
+
+    Returns
+    -------
+    None
+    """
 
     plt.imshow(cm, interpolation='nearest', cmap=cmap)
     plt.title(title)
@@ -327,10 +408,9 @@ def plot_confusion_matrix(cm, classes,
     plt.xticks(tick_marks, classes, rotation=45)
     plt.yticks(tick_marks, classes)
 
-    fmt = '.2f' if normalize else 'd'
     thresh = cm.max() / 2.
     for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
-        plt.text(j, i, format(cm[i, j], fmt),
+        plt.text(j, i, format(cm[i, j], 'd'),
                  horizontalalignment="center",
                  color="white" if cm[i, j] > thresh else "black")
 
